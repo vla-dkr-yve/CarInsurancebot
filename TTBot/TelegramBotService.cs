@@ -4,6 +4,7 @@ using Mindee.Http;
 using Mindee.Input;
 using Mindee.Product.Generated;
 using Mindee.Product.Passport;
+using System.Linq.Expressions;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -18,11 +19,12 @@ namespace TTBot
         private readonly TelegramOptions _telegramOptions;
         private readonly MindeeClient _mindeeClient;
 
-        private static TelegramBotClient _botClient;
+        private static TelegramBotClient? _botClient;
 
         private PassportData? passportInfo;
         private VehicleData? vehicleInfo;
 
+        private const int _insurancePrice = 100;
 
         private const string _startMessage = """
                 <b><u>Hello. I'm a car insurance bot</u></b>
@@ -33,14 +35,27 @@ namespace TTBot
 
         private const string _usageMessage = """
                 <b><u>Bot menu</u></b>:
-                /start  - start conversation
-                /send   - send a photo of you document
+                /start   - start conversation
+                /send    - send a photo of you document
+                /restart - remove send data and fill it one more time
             """;
 
         private const string _sendPhotoMessage = """
                 Currently you have to upload 2 photos:
                 1) Your passport data
                 2) Your vehicle identification document
+            """;
+
+        private const string _removeDataMessage = """
+                Your data has been cleared.
+                Now you can send it one more time
+            """;
+
+        private const string _photoesAllreadyMade = """
+                Sorry, but you already field and confirmed yoour data
+                if something is wrong and you want to send
+                passport and vehickle data one more time
+                please type "/restart"
             """;
 
         public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient)
@@ -53,10 +68,10 @@ namespace TTBot
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
 
-            var me = await _botClient.GetMe(stoppingToken);
+            var me = await _botClient!.GetMe(stoppingToken);
             Console.WriteLine($"Bot @{me.Username} is running...");
 
-            _botClient.StartReceiving(
+            _botClient!.StartReceiving(
                 HandleUpdateAsync,
                 HandleErrorAsync,
                 cancellationToken: stoppingToken
@@ -93,44 +108,60 @@ namespace TTBot
                 return;
 
             string userResponse = callbackQuery.Data;
+            string responseMessage = null;
 
-            await _botClient.EditMessageReplyMarkup(
+            await _botClient!.EditMessageReplyMarkup(
                 chatId: callbackQuery.Message.Chat.Id,
                 messageId: callbackQuery.Message.MessageId,
                 replyMarkup: null
             );
 
-            string responseMessage = userResponse switch
+            switch (userResponse)
             {
-                "passportCorrect" => """
-                Passport data was confirmed
-                Please send your vehicle identification document photo
-                """,
+                case "passportCorrect":
+                    responseMessage = """
+                        Passport data was confirmed
+                        Please send your vehicle identification document photo
+                    """;
+                    break;
+                case "passportIncorrect":
+                    passportInfo = null;
+                    responseMessage = """
+                        Passport data wasn't confirmed
+                        Please send your passport photo one more time
+                    """;
+                    break;
+                case "vehicleCorrect":
+                    responseMessage = """
+                        Vehicle data was confirmed
+                    """;
+                    break;
+                case "vehicleIncorrect":
+                    vehicleInfo = null;
+                    responseMessage = """
+                        Vehicle data wasn't confirmed
+                        Please send your vehicle identification document photo one more time
+                    """;
+                    break;
+                default:
+                    responseMessage = """
+                        Unknown
+                    """;
+                    break;
+            }
 
-                "passportIncorrect" => """
-                Passport data wasn't confirmed
-                Please send your passport photo one more time
-                """,
-
-                "vehicleCorrect" => """
-                Vehicle data was confirmed
-                """,
-
-                "vehicleIncorrect" => """
-                Passport data wasn't confirmed
-                Please send your vehicle identification document photo one more time
-                """,
-
-                _ => "Unknown response."
-            };
-
-            await _botClient.SendMessage(
+            await _botClient!.SendMessage(
                 chatId: callbackQuery.Message.Chat.Id,
-                text: responseMessage,
+                text: responseMessage!,
                 parseMode: ParseMode.Html
             );
 
-            await _botClient.AnswerCallbackQuery(callbackQuery.Id);
+            await _botClient!.AnswerCallbackQuery(callbackQuery.Id);
+
+            if ( (passportInfo.FistName != null && passportInfo.LastName != null) && (vehicleInfo.Make != null && vehicleInfo.Model != null) )
+            {
+                
+            }
         }
 
 
@@ -138,22 +169,30 @@ namespace TTBot
         {
             if (channelPost is null) return;
 
-            var photoSize = channelPost.Photo.Last();
+            var photoSize = channelPost.Photo!.Last();
             string fileId = photoSize.FileId;
 
-            var file = await _botClient.GetFile(fileId);
+            var file = await _botClient!.GetFile(fileId);
 
             using var memoryStream = new MemoryStream();
-            await _botClient.DownloadFile(file.FilePath!, memoryStream);
+            await _botClient!.DownloadFile(file.FilePath!, memoryStream);
             memoryStream.Position = 0;
 
             if (passportInfo is null)
             {
                 await GetThePassportInfoFromThePhoto(memoryStream, channelPost);
             }
-            else
+            else if(vehicleInfo is null)
             {
                 await GetTheVehicleInfoFromThePhoto(memoryStream, channelPost);
+            }
+            else
+            {
+                await _botClient!.SendMessage(
+                chatId: channelPost.Chat.Id,
+                text: _photoesAllreadyMade,
+                parseMode: ParseMode.Html
+                );
             }
         }
 
@@ -169,14 +208,33 @@ namespace TTBot
             await (messageText.Split(' ')[0] switch
             {
                 "/start" => StartMessage(message),
+                "/menu" => MenuMessage(message),
                 "/send" => SendPhotoMessage(message),
+                "/restart" => RemoveVehicleAndPassportData(message),
                 _ => Usage(message)
             });
         }
 
+        private async Task MenuMessage(Message message)
+        {
+            await _botClient!.SendMessage(chatId: message.Chat.Id,
+                    text: _usageMessage,
+                    parseMode: ParseMode.Html);
+        }
+
+        private async Task RemoveVehicleAndPassportData(Message message)
+        {
+            passportInfo = null;
+            vehicleInfo = null;
+
+            await _botClient!.SendMessage(chatId: message.Chat.Id,
+                    text: _removeDataMessage,
+                    parseMode: ParseMode.Html);
+        }
+
         private async Task Usage(Message message)
         {
-            await _botClient.SendMessage(
+            await _botClient!.SendMessage(
                     chatId: message.Chat.Id,
                     text: _usageMessage,
                     parseMode: ParseMode.Html
@@ -186,6 +244,7 @@ namespace TTBot
         private async Task UnknownUpdateHandlerAsync(Update update)
         {
             Console.WriteLine($"Unknown uopdate type: {update.Type}");
+            await Task.CompletedTask;
         }
 
         private Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
@@ -197,7 +256,7 @@ namespace TTBot
         private async Task SendPhotoMessage(Message message)
         {
 
-            await _botClient.SendMessage(
+            await _botClient!.SendMessage(
                     chatId: message.Chat.Id,
                     text: _sendPhotoMessage,
                     parseMode: ParseMode.Html
@@ -206,7 +265,7 @@ namespace TTBot
 
         private async Task StartMessage(Message message)
         {
-            await _botClient.SendMessage(
+            await _botClient!.SendMessage(
                     chatId: message.Chat.Id,
                     text: _startMessage,
                     parseMode: ParseMode.Html
@@ -233,7 +292,7 @@ namespace TTBot
                 Surname: {passportInfo.LastName}
             """;
 
-            await _botClient.SendMessage(chatId: message.Chat.Id,
+            await _botClient!.SendMessage(chatId: message.Chat.Id,
                      text: passportInfoString,
                      parseMode: ParseMode.Html);
 
@@ -244,7 +303,7 @@ namespace TTBot
                 ]);
 
             var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
-            await _botClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
+            await _botClient!.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
             //_botClient.AnswerCallbackQuery(IsPassportDataCorrect);
         }
 
@@ -259,13 +318,28 @@ namespace TTBot
 
             dynamic response = await _mindeeClient.EnqueueAndParseAsync<GeneratedV1>(inputSource, endpoint);
 
-            System.Console.WriteLine(response.Document.Inference.Prediction.ToString());
+            var prediction = response.Document.Inference.Prediction;
 
-            dynamic prediction = response.Document.Inference.Prediction;
+            string make = "Undefined";
+            string model = "Undefined";
 
-            // Option 1: Direct access (if you're sure the structure matches)
-            vehicleInfo.Make = response.Document.Inference.Pages[0].Prediction.vehicle_make.Value;
-            vehicleInfo.Model = response.Document.Inference.Pages[0].Prediction.vehicle_model.Value;
+            if (prediction.Fields != null && prediction.Fields.ContainsKey("vehicle_make"))
+            {
+                var makeField = prediction.Fields["vehicle_make"].AsStringField();
+                make = makeField?.Value ?? "Undefined";
+            }
+
+            if (prediction.Fields != null && prediction.Fields.ContainsKey("vehicle_model"))
+            {
+                var modelField = prediction.Fields["vehicle_model"].AsStringField();
+                model = modelField?.Value ?? "Undefined";
+            }
+
+            vehicleInfo = new VehicleData
+            {
+                Make = make,
+                Model = model
+            };
 
             string vehicleInfoString = $"""
                 <b><u>Vehicle Data</u></b>
@@ -273,7 +347,7 @@ namespace TTBot
                 Model: {vehicleInfo.Model}
             """;
 
-            await _botClient.SendMessage(chatId: message.Chat.Id,
+            await _botClient!.SendMessage(chatId: message.Chat.Id,
                      text: vehicleInfoString,
                      parseMode: ParseMode.Html);
 
@@ -284,7 +358,7 @@ namespace TTBot
                 ]);
 
             var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
-            await _botClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
+            await _botClient!.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
         }
     }
 }
