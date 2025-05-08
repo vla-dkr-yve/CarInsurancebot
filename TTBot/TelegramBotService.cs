@@ -7,6 +7,7 @@ using Mindee.Product.Passport;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 using TTBot.MindeeData;
 using TTBot.Options;
 
@@ -69,16 +70,71 @@ namespace TTBot
         {
 
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (update.Message?.Photo != null && update.Message.Photo.Any())
+            {
+                await SavePhoto(update.Message);
+                return;
+            }
+
             await (update switch
             {
                 { Message: { } message } => OnMessage(message),
                 { EditedMessage: { } message } => OnMessage(message),
-                { ChannelPost: { } channelPost } => SavePost(channelPost),
+                { CallbackQuery: { } callbackQuery } => HandleCallbackQuery(callbackQuery),
                 _ => UnknownUpdateHandlerAsync(update)
             });
         }
 
-        private async Task SavePost(Message channelPost)
+        private async Task HandleCallbackQuery(CallbackQuery callbackQuery)
+        {
+
+            if (callbackQuery.Message == null)
+                return;
+
+            string userResponse = callbackQuery.Data;
+
+            await _botClient.EditMessageReplyMarkup(
+                chatId: callbackQuery.Message.Chat.Id,
+                messageId: callbackQuery.Message.MessageId,
+                replyMarkup: null
+            );
+
+            string responseMessage = userResponse switch
+            {
+                "passportCorrect" => """
+                Passport data was confirmed
+                Please send your vehicle identification document photo
+                """,
+
+                "passportIncorrect" => """
+                Passport data wasn't confirmed
+                Please send your passport photo one more time
+                """,
+
+                "vehicleCorrect" => """
+                Vehicle data was confirmed
+                """,
+
+                "vehicleIncorrect" => """
+                Passport data wasn't confirmed
+                Please send your vehicle identification document photo one more time
+                """,
+
+                _ => "Unknown response."
+            };
+
+            await _botClient.SendMessage(
+                chatId: callbackQuery.Message.Chat.Id,
+                text: responseMessage,
+                parseMode: ParseMode.Html
+            );
+
+            await _botClient.AnswerCallbackQuery(callbackQuery.Id);
+        }
+
+
+        private async Task SavePhoto(Message channelPost)
         {
             if (channelPost is null) return;
 
@@ -89,14 +145,15 @@ namespace TTBot
 
             using var memoryStream = new MemoryStream();
             await _botClient.DownloadFile(file.FilePath!, memoryStream);
+            memoryStream.Position = 0;
 
             if (passportInfo is null)
             {
-                await GetThePassportInfoFromThePhoto(memoryStream);
+                await GetThePassportInfoFromThePhoto(memoryStream, channelPost);
             }
             else
             {
-                await GetTheVehicleInfoFromThePhoto(memoryStream);
+                await GetTheVehicleInfoFromThePhoto(memoryStream, channelPost);
             }
         }
 
@@ -139,6 +196,7 @@ namespace TTBot
 
         private async Task SendPhotoMessage(Message message)
         {
+
             await _botClient.SendMessage(
                     chatId: message.Chat.Id,
                     text: _sendPhotoMessage,
@@ -155,17 +213,42 @@ namespace TTBot
              );
         }
 
-        private async Task GetThePassportInfoFromThePhoto(MemoryStream memoryStream)
+        private async Task GetThePassportInfoFromThePhoto(MemoryStream memoryStream, Message message)
         {
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
             var response = await _mindeeClient.ParseAsync<PassportV1>(inputSource);
 
-            passportInfo.FistName = response.Document.Inference.Prediction.GivenNames.FirstOrDefault().Value;
-            passportInfo.FistName = response.Document.Inference.Prediction.Surname.Value;
+            passportInfo = new PassportData
+            {
+                FistName = response.Document.Inference.Prediction.GivenNames.FirstOrDefault()?.Value ?? "N/A",
+                LastName = response.Document.Inference.Prediction.Surname.Value ?? "N/A"
+            };
+
+            Console.WriteLine(response.Document.Inference.Prediction.ToString());
+
+            string passportInfoString = $"""
+                <b><u>Passport Data</u></b>
+                First name: {passportInfo.FistName}
+                Surname: {passportInfo.LastName}
+            """;
+
+            await _botClient.SendMessage(chatId: message.Chat.Id,
+                     text: passportInfoString,
+                     parseMode: ParseMode.Html);
+
+            InlineKeyboardMarkup inlineKeyboard = new(
+                [
+                    [InlineKeyboardButton.WithCallbackData("Yes", "passportCorrect")],
+                    [InlineKeyboardButton.WithCallbackData("No", "passportIncorrect")]
+                ]);
+
+            var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
+            await _botClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
+            //_botClient.AnswerCallbackQuery(IsPassportDataCorrect);
         }
 
-        private async Task GetTheVehicleInfoFromThePhoto(MemoryStream memoryStream)
+        private async Task GetTheVehicleInfoFromThePhoto(MemoryStream memoryStream, Message message)
         {
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
@@ -176,8 +259,32 @@ namespace TTBot
 
             dynamic response = await _mindeeClient.EnqueueAndParseAsync<GeneratedV1>(inputSource, endpoint);
 
-            vehicleInfo.Make = response.Document.Inference.Prediction.vehicle_make.value;
-            vehicleInfo.Model = response.Document.Inference.Prediction.vehicle_model.ToString();
+            System.Console.WriteLine(response.Document.Inference.Prediction.ToString());
+
+            dynamic prediction = response.Document.Inference.Prediction;
+
+            // Option 1: Direct access (if you're sure the structure matches)
+            vehicleInfo.Make = response.Document.Inference.Pages[0].Prediction.vehicle_make.Value;
+            vehicleInfo.Model = response.Document.Inference.Pages[0].Prediction.vehicle_model.Value;
+
+            string vehicleInfoString = $"""
+                <b><u>Vehicle Data</u></b>
+                Make: {vehicleInfo.Make}
+                Model: {vehicleInfo.Model}
+            """;
+
+            await _botClient.SendMessage(chatId: message.Chat.Id,
+                     text: vehicleInfoString,
+                     parseMode: ParseMode.Html);
+
+            InlineKeyboardMarkup inlineKeyboard = new(
+                [
+                    [InlineKeyboardButton.WithCallbackData("Yes", "vehicleCorrect")],
+                    [InlineKeyboardButton.WithCallbackData("No", "vehicleIncorrect")]
+                ]);
+
+            var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
+            await _botClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
         }
     }
 }

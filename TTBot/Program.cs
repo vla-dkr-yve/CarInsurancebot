@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
     -Comment most essential parts of the code
  */
 // Bind Telegram options from configuration
+
 builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
 builder.Services.AddMindeeClient();
 
