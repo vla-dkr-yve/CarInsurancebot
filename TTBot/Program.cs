@@ -1,5 +1,5 @@
 using Mindee.Extensions.DependencyInjection;
-using TTBot;
+using TTBot.Bot;
 using TTBot.Options;
 
 var builder = WebApplication.CreateBuilder(args);
