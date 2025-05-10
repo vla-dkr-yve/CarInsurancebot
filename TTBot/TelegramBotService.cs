@@ -11,6 +11,7 @@ using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TTBot.MindeeData;
 using TTBot.Options;
+using TTBot.Session;
 
 namespace TTBot
 {
@@ -21,8 +22,7 @@ namespace TTBot
 
         private static TelegramBotClient? _botClient;
 
-        private PassportData? passportInfo;
-        private VehicleData? vehicleInfo;
+        private readonly Dictionary<long, UserSession> UserSessions = new();
 
         private const int _insurancePrice = 100;
 
@@ -30,13 +30,13 @@ namespace TTBot
                 <b><u>Hello. I'm a car insurance bot</u></b>
                 My purpose is to assist you with
                 buying an insurance for your car
-                Plese type /send to get futher instructions
+                Plese type /menu to get futher instructions
             """;
 
         private const string _usageMessage = """
                 <b><u>Bot menu</u></b>:
                 /start   - start conversation
-                /send    - send a photo of you document
+                /send    - get information about required documents
                 /restart - remove send data and fill it one more time
             """;
 
@@ -52,11 +52,17 @@ namespace TTBot
             """;
 
         private const string _photoesAllreadyMade = """
-                Sorry, but you already field and confirmed yoour data
+                Sorry, but you already field and confirmed your data
                 if something is wrong and you want to send
                 passport and vehickle data one more time
                 please type "/restart"
             """;
+
+        private string _paymentMessage = $"""
+                Current price for car insurance is {_insurancePrice}$
+                Do you agree for this price?
+            """;
+
 
         public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient)
         {
@@ -107,6 +113,8 @@ namespace TTBot
             if (callbackQuery.Message == null)
                 return;
 
+            var session = GetSession(callbackQuery.Message.Chat.Id);
+
             string userResponse = callbackQuery.Data;
             string responseMessage = null;
 
@@ -119,28 +127,43 @@ namespace TTBot
             switch (userResponse)
             {
                 case "passportCorrect":
+                    session.IsPassportConfirmed = true;
                     responseMessage = """
                         Passport data was confirmed
                         Please send your vehicle identification document photo
                     """;
                     break;
                 case "passportIncorrect":
-                    passportInfo = null;
+                    session.IsPassportConfirmed = false;
+                    session.PassportInfo = null;
                     responseMessage = """
                         Passport data wasn't confirmed
                         Please send your passport photo one more time
                     """;
                     break;
                 case "vehicleCorrect":
+                    session.IsVehicleConfirmed = true;
                     responseMessage = """
                         Vehicle data was confirmed
                     """;
                     break;
                 case "vehicleIncorrect":
-                    vehicleInfo = null;
+                    session.IsVehicleConfirmed = false;
+                    session.VehicleInfo = null;
                     responseMessage = """
                         Vehicle data wasn't confirmed
                         Please send your vehicle identification document photo one more time
+                    """;
+                    break;
+                case "paymentAgreed":
+                    responseMessage = """
+                        Payment confirmed
+                    """;
+                    break;
+                case "paymentDisagreed":
+                    responseMessage = $"""
+                        Sorry, but currently the only available price
+                        is {_insurancePrice}$
                     """;
                     break;
                 default:
@@ -156,18 +179,20 @@ namespace TTBot
                 parseMode: ParseMode.Html
             );
 
-            await _botClient!.AnswerCallbackQuery(callbackQuery.Id);
-
-            if ( (passportInfo.FistName != null && passportInfo.LastName != null) && (vehicleInfo.Make != null && vehicleInfo.Model != null) )
+            if (session.IsPassportConfirmed && session.IsVehicleConfirmed)
             {
-                
+                AskForPayment(callbackQuery.Message);
             }
+
+            await _botClient!.AnswerCallbackQuery(callbackQuery.Id);
         }
 
 
         private async Task SavePhoto(Message channelPost)
         {
             if (channelPost is null) return;
+
+            var session = GetSession(channelPost.Chat.Id);
 
             var photoSize = channelPost.Photo!.Last();
             string fileId = photoSize.FileId;
@@ -178,11 +203,11 @@ namespace TTBot
             await _botClient!.DownloadFile(file.FilePath!, memoryStream);
             memoryStream.Position = 0;
 
-            if (passportInfo is null)
+            if (session.PassportInfo is null)
             {
                 await GetThePassportInfoFromThePhoto(memoryStream, channelPost);
             }
-            else if(vehicleInfo is null)
+            else if(session.VehicleInfo is null)
             {
                 await GetTheVehicleInfoFromThePhoto(memoryStream, channelPost);
             }
@@ -224,8 +249,10 @@ namespace TTBot
 
         private async Task RemoveVehicleAndPassportData(Message message)
         {
-            passportInfo = null;
-            vehicleInfo = null;
+            var session = GetSession(message.Chat.Id);
+
+            session.PassportInfo = null;
+            session.VehicleInfo = null;
 
             await _botClient!.SendMessage(chatId: message.Chat.Id,
                     text: _removeDataMessage,
@@ -274,11 +301,13 @@ namespace TTBot
 
         private async Task GetThePassportInfoFromThePhoto(MemoryStream memoryStream, Message message)
         {
+            var session = GetSession(message.Chat.Id);
+
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
             var response = await _mindeeClient.ParseAsync<PassportV1>(inputSource);
 
-            passportInfo = new PassportData
+            session.PassportInfo = new PassportData
             {
                 FistName = response.Document.Inference.Prediction.GivenNames.FirstOrDefault()?.Value ?? "N/A",
                 LastName = response.Document.Inference.Prediction.Surname.Value ?? "N/A"
@@ -288,8 +317,8 @@ namespace TTBot
 
             string passportInfoString = $"""
                 <b><u>Passport Data</u></b>
-                First name: {passportInfo.FistName}
-                Surname: {passportInfo.LastName}
+                First name: {session.PassportInfo.FistName}
+                Surname: {session.PassportInfo.LastName}
             """;
 
             await _botClient!.SendMessage(chatId: message.Chat.Id,
@@ -309,6 +338,8 @@ namespace TTBot
 
         private async Task GetTheVehicleInfoFromThePhoto(MemoryStream memoryStream, Message message)
         {
+            var session = GetSession(message.Chat.Id);
+
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
             CustomEndpoint endpoint = new CustomEndpoint(
@@ -335,7 +366,7 @@ namespace TTBot
                 model = modelField?.Value ?? "Undefined";
             }
 
-            vehicleInfo = new VehicleData
+            session.VehicleInfo = new VehicleData
             {
                 Make = make,
                 Model = model
@@ -343,8 +374,8 @@ namespace TTBot
 
             string vehicleInfoString = $"""
                 <b><u>Vehicle Data</u></b>
-                Make: {vehicleInfo.Make}
-                Model: {vehicleInfo.Model}
+                Make: {session.VehicleInfo.Make}
+                Model: {session.VehicleInfo.Model}
             """;
 
             await _botClient!.SendMessage(chatId: message.Chat.Id,
@@ -359,6 +390,32 @@ namespace TTBot
 
             var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
             await _botClient!.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
+        }
+
+        private async Task AskForPayment(Message message)
+        {
+            var session = GetSession(message.Chat.Id);
+            if (session.IsPassportConfirmed && session.IsVehicleConfirmed)
+            {
+                InlineKeyboardMarkup inlineKeyboard = new(
+                [
+                    [InlineKeyboardButton.WithCallbackData("Yes, I agree", "paymentAgreed")],
+                    [InlineKeyboardButton.WithCallbackData("No, I disagree", "paymentDisagreed")]
+                ]);
+
+                await _botClient!.SendMessage(message.Chat.Id, _paymentMessage, replyMarkup: inlineKeyboard);
+            }
+        }
+
+        private UserSession GetSession(long chatId)
+        {
+            if (!UserSessions.TryGetValue(chatId, out var session))
+            {
+                session = new UserSession();
+                UserSessions.Add(chatId, session);
+            }
+
+            return session;
         }
     }
 }
