@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Mindee;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -13,16 +14,19 @@ namespace TTBot.Bot
 {
     public class TelegramBotService : BackgroundService
     {
+        private IConfiguration _configuration;
+
         private readonly TelegramOptions _telegramOptions;
         private TelegramBotClient BotClient { get; init; }
 
         private PhotoProcessor _photoProcessor;
 
-        public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient, PhotoProcessor photoProcessor)
+        public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient, PhotoProcessor photoProcessor, IConfiguration configuration)
         {
             _telegramOptions = telegramOptions.Value;
             BotClient = new TelegramBotClient(_telegramOptions.Token);
             _photoProcessor = photoProcessor;
+            _configuration = configuration;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -284,20 +288,8 @@ namespace TTBot.Bot
         {
             var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
 
-            // Simulate "typing..." while waiting for policy generation
-            var typingCts = new CancellationTokenSource();
-            _ = Task.Run(async () =>
-            {
-                while (!typingCts.IsCancellationRequested)
-                {
-                    await BotClient.SendChatAction(message.Chat.Id, ChatAction.Typing);
-                    await Task.Delay(4000, typingCts.Token);
-                }
-            });
+            var response = await PolicyGenerator.RequestPolicyGeneration(message, session, _configuration);
 
-            var response = await PolicyGenerator.RequestPolicyGeneration(message, session);
-
-            typingCts.Cancel();
             await BotClient.SendMessage(message.Chat.Id, response);
 
         }
