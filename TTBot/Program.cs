@@ -1,6 +1,7 @@
 using Mindee.Extensions.DependencyInjection;
 using TTBot.Bot;
 using TTBot.Options;
+using TTBot.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 /* 
@@ -19,6 +20,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection("Telegram"));
 builder.Services.AddMindeeClient();
+
+builder.Services.AddSingleton<PhotoProcessor>();
 
 // Register Telegram bot background service
 builder.Services.AddHostedService<TelegramBotService>();

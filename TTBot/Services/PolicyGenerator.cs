@@ -12,7 +12,7 @@ namespace TTBot.Services
         public static async Task<string> RequestPolicyGeneration(Message message, UserSession session)
         {
             string PolicyRequest = $"Instruction: Do not include disclaimers, introductions, or explanations. Only output the requested policy content. " +
-                $"Generate very short insurance policy document on name {session.PassportInfo.FistName} {session.PassportInfo.LastName}" +
+                $"Generate very short insurance policy document on name {session.PassportInfo.FirstName} {session.PassportInfo.LastName}" +
                 $" on the vehicle {session.VehicleInfo.Model} made by {session.VehicleInfo.Make}, insurance price is {BotConstants._insurancePrice}";
 
             var httpClient = new HttpClient();

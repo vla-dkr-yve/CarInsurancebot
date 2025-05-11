@@ -1,14 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
 using Mindee;
-using Mindee.Http;
-using Mindee.Input;
-using Mindee.Product.Generated;
-using Mindee.Product.NutritionFactsLabel;
-using Mindee.Product.Passport;
-using System.Linq.Expressions;
-using System.Net.Http;
-using System.Text;
-using System.Text.Json;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -17,7 +8,6 @@ using TTBot.Constants;
 using TTBot.MindeeData;
 using TTBot.Options;
 using TTBot.Services;
-using TTBot.Session;
 
 namespace TTBot.Bot
 {
@@ -26,10 +16,13 @@ namespace TTBot.Bot
         private readonly TelegramOptions _telegramOptions;
         private TelegramBotClient BotClient { get; init; }
 
-        public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient)
+        private PhotoProcessor _photoProcessor;
+
+        public TelegramBotService(IOptions<TelegramOptions> telegramOptions, MindeeClient mindeeClient, PhotoProcessor photoProcessor)
         {
             _telegramOptions = telegramOptions.Value;
             BotClient = new TelegramBotClient(_telegramOptions.Token);
+            _photoProcessor = photoProcessor;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,17 +41,20 @@ namespace TTBot.Bot
             await Task.Delay(Timeout.Infinite, stoppingToken);
         }
 
+        // Handles incoming updates from Telegram
         private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            // If the message contains a photo, handle it
             if (update.Message?.Photo != null && update.Message.Photo.Any())
             {
                 await SavePhoto(update.Message);
                 return;
             }
 
+            // Handle other update types using pattern matching
             await (update switch
             {
                 { Message: { } message } => OnMessage(message),
@@ -68,12 +64,14 @@ namespace TTBot.Bot
             });
         }
 
+        // Handles inline keyboard button callback queries
         private async Task HandleCallbackQuery(CallbackQuery callbackQuery)
         {
             var session = UserSessionManager.GetOrCreateSession(callbackQuery.Message.Chat.Id);
 
             var responseMessage = await CallbackHandler.HandleAsync(callbackQuery, session);
 
+            // Removes the inline keyboard from the chat
             await BotClient.EditMessageReplyMarkup(
                 chatId: callbackQuery.Message.Chat.Id,
                 messageId: callbackQuery.Message.MessageId,
@@ -99,29 +97,71 @@ namespace TTBot.Bot
             await BotClient.AnswerCallbackQuery(callbackQuery.Id);
         }
 
-
+        //Processes an uploaded photo
         private async Task SavePhoto(Message channelPost)
         {
             if (channelPost is null) return;
-
+            
             var session = UserSessionManager.GetOrCreateSession(channelPost.Chat.Id);
-
-            var photoSize = channelPost.Photo!.Last();
+            
+            var photoSize = channelPost.Photo?.Last();
             string fileId = photoSize.FileId;
-
-            var file = await BotClient!.GetFile(fileId);
-
+            
+            var file = await BotClient.GetFile(fileId);
+            
             using var memoryStream = new MemoryStream();
-            await BotClient!.DownloadFile(file.FilePath!, memoryStream);
+            await BotClient.DownloadFile(file.FilePath!, memoryStream);
             memoryStream.Position = 0;
+            
+            if (session.PassportInfo.FirstName == String.Empty || session.PassportInfo.LastName == String.Empty)
+            {
+                var response = await _photoProcessor.GetThePassportInfoFromThePhotoAsync(memoryStream, session);
 
-            if (session.PassportInfo is null)
-            {
-                await PassportInfoFromThePhoto(memoryStream, channelPost);
+                await BotClient!.SendMessage(
+                chatId: channelPost.Chat.Id,
+                text: response,
+                parseMode: ParseMode.Html
+                );
+
+                if (response == BotConstants._notAbleToProcessThePhoto) return;
+
+                InlineKeyboardMarkup inlineKeyboard = new(
+                [
+                    [InlineKeyboardButton.WithCallbackData("Yes", "passportCorrect")],
+                    [InlineKeyboardButton.WithCallbackData("No", "passportIncorrect")]
+                ]);
+
+                await BotClient!.SendMessage(
+                chatId: channelPost.Chat.Id,
+                text: "Is passport data correct?",
+                replyMarkup: inlineKeyboard,
+                parseMode: ParseMode.Html
+                );
             }
-            else if (session.VehicleInfo is null)
+            else if (session.VehicleInfo.Make == String.Empty || session.VehicleInfo.Model == String.Empty)
             {
-                await VehicleInfoFromThePhoto(memoryStream, channelPost);
+                var response = await _photoProcessor.GetTheVehicleInfoFromThePhotoAsync(memoryStream, session);
+
+                await BotClient!.SendMessage(
+                chatId: channelPost.Chat.Id,
+                text: response,
+                parseMode: ParseMode.Html
+                );
+
+                if (response == BotConstants._notAbleToProcessThePhoto) return;
+
+                InlineKeyboardMarkup inlineKeyboard = new(
+                [
+                    [InlineKeyboardButton.WithCallbackData("Yes", "vehicleCorrect")],
+                    [InlineKeyboardButton.WithCallbackData("No", "vehicleIncorrect")]
+                ]);
+
+                await BotClient!.SendMessage(
+                chatId: channelPost.Chat.Id,
+                text: "Is vehicle data correct?",
+                replyMarkup: inlineKeyboard,
+                parseMode: ParseMode.Html
+                );
             }
             else
             {
@@ -133,6 +173,7 @@ namespace TTBot.Bot
             }
         }
 
+        // Handles incoming text messages
         private async Task OnMessage(Message message)
         {
             Console.WriteLine($"Received message from {message.Chat.Id}: {message.Text}");
@@ -142,6 +183,7 @@ namespace TTBot.Bot
                 return;
             }
 
+            // Route commands to the appropriate handler
             await (messageText.Split(' ')[0] switch
             {
                 "/start" => StartMessage(message),
@@ -159,6 +201,7 @@ namespace TTBot.Bot
                     parseMode: ParseMode.Html);
         }
 
+        // Clears user session data and flags
         private async Task RemoveVehicleAndPassportData(Message message)
         {
             var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
@@ -185,12 +228,14 @@ namespace TTBot.Bot
              );
         }
 
+        // Handles unexpected update types
         private async Task UnknownUpdateHandlerAsync(Update update)
         {
-            Console.WriteLine($"Unknown uopdate type: {update.Type}");
+            Console.WriteLine($"Unknown update type: {update.Type}");
             await Task.CompletedTask;
         }
 
+        // Logs errors encountered during update handling
         private Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
         {
             Console.WriteLine($"Telegram Bot Error: {exception.Message}");
@@ -215,48 +260,7 @@ namespace TTBot.Bot
              );
         }
 
-        private async Task PassportInfoFromThePhoto(MemoryStream memoryStream, Message message)
-        {
-            var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
-
-            var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
-
-            var passportInfoString = await PhotoProcessor.GetThePassportInfoFromThePhotoAsync(memoryStream, session);
-
-            await BotClient.SendMessage(chatId: message.Chat.Id,
-                     text: passportInfoString,
-                     parseMode: ParseMode.Html);
-
-            InlineKeyboardMarkup inlineKeyboard = new(
-                [
-                    [InlineKeyboardButton.WithCallbackData("Yes", "passportCorrect")],
-                    [InlineKeyboardButton.WithCallbackData("No", "passportIncorrect")]
-                ]);
-
-            var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
-            await BotClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
-        }
-
-        private async Task VehicleInfoFromThePhoto(MemoryStream memoryStream, Message message)
-        {
-            var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
-
-            var vehicleInfoString = await PhotoProcessor.GetTheVehicleInfoFromThePhotoAsync(memoryStream, session);
-
-            await BotClient.SendMessage(chatId: message.Chat.Id,
-                     text: vehicleInfoString,
-                     parseMode: ParseMode.Html);
-
-            InlineKeyboardMarkup inlineKeyboard = new(
-                [
-                    [InlineKeyboardButton.WithCallbackData("Yes", "vehicleCorrect")],
-                    [InlineKeyboardButton.WithCallbackData("No", "vehicleIncorrect")]
-                ]);
-
-            var button = InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode");
-            await BotClient.SendMessage(message.Chat.Id, "Is it correct?", replyMarkup: inlineKeyboard);
-        }
-
+        // Asks user to confirm the payment step
         private async Task AskForPayment(Message message)
         {
             var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
@@ -275,10 +279,12 @@ namespace TTBot.Bot
             await BotClient.SendMessage(message.Chat.Id, _paymentMessage, replyMarkup: inlineKeyboard);
         }
 
+        // Sends the final insurance policy response
         private async Task PolicyGeneration(Message message)
         {
             var session = UserSessionManager.GetOrCreateSession(message.Chat.Id);
 
+            // Simulate "typing..." while waiting for policy generation
             var typingCts = new CancellationTokenSource();
             _ = Task.Run(async () =>
             {

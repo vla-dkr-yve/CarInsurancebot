@@ -19,7 +19,7 @@
             """;
 
         public const string _sendPhotoMessage = """
-                Currently you have to upload 2 photos:
+                To get the insurance you have to upload 2 photos:
                 1) Your passport data
                 2) Your vehicle identification document
             """;
@@ -34,6 +34,11 @@
                 if something is wrong and you want to send
                 passport and vehickle data one more time
                 please type "/restart"
+            """;
+
+        public const string _notAbleToProcessThePhoto = """
+                Sorry, but I can't read this type of photo. 
+                Could you please send it one more time
             """;
     }
 }

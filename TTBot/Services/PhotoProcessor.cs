@@ -1,26 +1,24 @@
 ﻿using Mindee.Input;
 using Mindee.Product.Passport;
 using Mindee;
-using Telegram.Bot.Types.Enums;
-using Telegram.Bot.Types.ReplyMarkups;
-using Telegram.Bot.Types;
 using TTBot.Session;
 using TTBot.MindeeData;
 using Mindee.Http;
 using Mindee.Product.Generated;
+using TTBot.Constants;
 
 namespace TTBot.Services
 {
     public class PhotoProcessor
     {
-        private static MindeeClient _mindeeClient;
+        private MindeeClient _mindeeClient;
 
         public PhotoProcessor(MindeeClient mindeeClient)
         {
             _mindeeClient = mindeeClient;
         }
 
-        public static async Task<string> GetThePassportInfoFromThePhotoAsync(MemoryStream memoryStream, UserSession session)
+        public async Task<string> GetThePassportInfoFromThePhotoAsync(MemoryStream memoryStream, UserSession session)
         {
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
@@ -28,22 +26,30 @@ namespace TTBot.Services
 
             session.PassportInfo = new PassportData
             {
-                FistName = response.Document.Inference.Prediction.GivenNames.FirstOrDefault()?.Value ?? "N/A",
-                LastName = response.Document.Inference.Prediction.Surname.Value ?? "N/A"
+                FirstName = response.Document.Inference.Prediction.GivenNames.FirstOrDefault()?.Value ?? "Undefined",
+                LastName = response.Document.Inference.Prediction.Surname.Value ?? "Undefined"
             };
 
-            Console.WriteLine(response.Document.Inference.Prediction.ToString());
+            string passportInfoString = String.Empty;
 
-            string passportInfoString = $"""
-                <b><u>Passport Data</u></b>
-                First name: {session.PassportInfo.FistName}
-                Surname: {session.PassportInfo.LastName}
-            """;
+            if (session.PassportInfo.FirstName == "Undefined" || session.PassportInfo.LastName == "Undefined")
+            {
+                session.PassportInfo = new PassportData();
+                passportInfoString = BotConstants._notAbleToProcessThePhoto;
+            }
+            else
+            {
+                passportInfoString = $"""
+                    <b><u>Passport Data</u></b>
+                    First name: {session.PassportInfo.FirstName}
+                    Surname: {session.PassportInfo.LastName}
+                """;
+            }
 
             return passportInfoString;
         }
 
-        public static async Task<string> GetTheVehicleInfoFromThePhotoAsync(MemoryStream memoryStream, UserSession session)
+        public async Task<string> GetTheVehicleInfoFromThePhotoAsync(MemoryStream memoryStream, UserSession session)
         {
             var inputSource = new LocalInputSource(memoryStream, "passport.jpg");
 
@@ -71,13 +77,23 @@ namespace TTBot.Services
                 model = modelField?.Value ?? "Undefined";
             }
 
-            session.VehicleInfo = new VehicleData
-            {
-                Make = make,
-                Model = model
-            };
+            var vehicleInfoString = String.Empty;
 
-            string vehicleInfoString = $"""
+            if (make == "Undefined" || model == "Undefined")
+            {
+                session.VehicleInfo = new VehicleData();
+                vehicleInfoString = BotConstants._notAbleToProcessThePhoto;
+            }
+            else
+            {
+                session.VehicleInfo = new VehicleData
+                {
+                    Make = make,
+                    Model = model
+                };
+            }
+
+            vehicleInfoString = $"""
                 <b><u>Vehicle Data</u></b>
                 Make: {session.VehicleInfo.Make}
                 Model: {session.VehicleInfo.Model}
