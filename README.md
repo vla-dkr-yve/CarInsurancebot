@@ -16,6 +16,8 @@ dotnet add package Mindee
 To make it possible I used GroqAPI that runs on the basis of ollama LLM
 ### General
 After acquiring keys they should be put into appsetings.json / secrets / any other place that can be get from
+## Bot showcase
+Video showcase of bot workflow and interactions with user: https://youtu.be/bAgI6V2Xn3s
 
 # Bot workflow
 This bot has a few states depending on the user's input.
