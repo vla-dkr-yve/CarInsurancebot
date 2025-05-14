@@ -13,12 +13,7 @@ To made bot able to "read" data from photo was used MindeeAPI. In this project 2
 dotnet add package Mindee
 ```
 ### Setting AI for generating policy
-To make it possible I used Ollama downloaded from the official cite https://ollama.com
-After downloading run the cmd and start the model
-```
-ollama run llama3
-```
-P.s Can be used any model depending on your requirements, for futher information check ollama documentation
+To make it possible I used GroqAPI that runs on the basis of ollama LLM
 ### General
 After acquiring keys they should be put into appsetings.json / secrets / any other place that can be get from
 
