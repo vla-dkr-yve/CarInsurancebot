@@ -13,7 +13,7 @@ To made bot able to "read" data from photo was used MindeeAPI. In this project 2
 dotnet add package Mindee
 ```
 ### Setting AI for generating policy
-To make it possible I used GroqAPI that runs on the basis of ollama LLM
+As soon as user confirms everything bot sends an HTTPRequest to GroqAPI in order to generate the insurance policy using pre-made prompt
 ### General
 After acquiring keys they should be put into appsetings.json / secrets / any other place that can be get from
 ## Bot showcase
